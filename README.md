@@ -5,16 +5,17 @@ LlamaStudio is an end-to-end, server-side autonomous media creation engine that 
 ## 🚀 Core Architecture & Features
 * **Multimodal Grounding (Llama 3.2 Vision):** Automatically extracts context from primary visual sources like historical photos, document scans, or news clippings to drive narration scripts.
 * **Structured Script Synthesis (Llama 3.1):** Enforces strict JSON Schema guardrails to research complex historical events and structure multi-scene documentary chapters.
-* **Programmatic Rendering Pipeline:** Calculates synchronized audio-to-video duration tensors, applies real-time linear image histogram color matching, and overlays atmospheric particle filters.
-* **Dual-Format Delivery:** Encodes high-definition master compositions alongside automated vertical promo crops optimized for TikTok, Shorts, and Reels using a customized parallelized FFmpeg backend.
+* **Open Audio Generation (Meta AudioCraft):** Leverages open-weights voice generation to synthesize lifelike narration completely free and natively within the ecosystem.
+* **Programmatic Rendering Pipeline:** Calculates synchronized audio-to-video duration tensors, applies real-time linear image histogram color matching, and overlays atmospheric particle filters via a customized parallelized FFmpeg backend.
 
 ---
 
 ## 🛠️ Technical Stack
 * **Frontend Dashboard:** Streamlit (Pure Python Interface)
 * **LLM & Vision Layer:** Meta Llama 3.1 (70B/405B) & Llama 3.2 Vision via Groq/Together AI API
+* **Audio Synthesis:** Meta AudioCraft / Bark API
 * **Media Compositor:** Hard-optimized FFmpeg systems engineering framework
-* **Image & Audio Engines:** OpenCV (cv2), NumPy, SoundFile, MeloTTS/Bark API
+* **Image Processing:** OpenCV (cv2), NumPy, SoundFile
 
 ---
 
@@ -35,8 +36,7 @@ pip install -r requirements.txt
 Create a `.env` file in the project root directory:
 ```env
 LLAMA_API_KEY=your_meta_llama_api_provider_key
-CLOUDFLARE_ACCOUNT_ID=your_cloudflare_id
-CLOUDFLARE_API_TOKEN=your_cloudflare_token
+AUDIO_API_KEY=your_audio_generation_key
 ```
 
 ---
