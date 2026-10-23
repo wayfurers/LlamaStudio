@@ -1,0 +1,7 @@
+streamlit==1.39.0
+google-genai==0.1.1
+opencv-python-headless==4.10.0.84
+numpy==1.26.4
+requests==2.32.3
+soundfile==0.12.1
+meta-audiocraft==1.0.0
