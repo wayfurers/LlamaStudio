@@ -1,7 +1,113 @@
-streamlit==1.39.0
-google-genai==0.1.1
-opencv-python-headless==4.10.0.84
-numpy==1.26.4
-requests==2.32.3
-soundfile==0.12.1
-meta-audiocraft==1.0.0
+import base64 import functools import gc import json import os import platform import random import re import shutil import subprocess import sys import time from typing import Any, Dict, List, Optional import cv2 import gradio as gr import numpy as np from google import genai from google.genai import types import requests import soundfile as sf # ============================================================================== # 1. PLATFORM OPTIMIZATIONS & DEPENDENCY CHECKS # ============================================================================== cv2.setNumThreads(0) V_ENCODER = 'h264_videotoolbox' if platform.system() == 'Darwin' else 'libx264' V_EXTRA_FLAGS = ['-b:v', '4000k'] if V_ENCODER == 'h264_videotoolbox' else ['-preset', 'ultrafast', '-crf', '22'] # ============================================================================== # 2. THE 5-NICHE MYSTERY AESTHETIC DICTIONARY # ============================================================================== NICHE_AESTHETICS = { "True Crime Engine": { "style": "Finely detailed gritty true-crime documentary style, eerie dramatic volumetric lighting, dark deep cinematic shadows, 35mm film grain, 1080p high photographic resolution. Muted tactical color palette. No text.", "angles": [ "Extreme macro close-up macro lens detail shot, dramatic shallow depth of field, sharp focus on evidentiary items,", "High-angle top-down forensic bird-eye drone vantage point, wide establishing surveillance layout,", "Low-angle oblique look, deep shadows, Dutch tilt composition skewing perspective,", "Medium tracking profile scan perspective, clinical police archive documentation composition," ] }, "Aviation Engine": { "style": "Highly technical aviation forensic aesthetic, dimly lit hangar ambiance, glowing radar displays reflecting on metallic surfaces, green and amber instrument panel bokeh, dark atmospheric documentary style, 35mm film grain. No text.", "angles": [ "Macro close-up on a weathered, scorched black box flight data recorder mechanism,", "Top-down tactical view of a flight path radar tracking monitor displaying sweeping vectors,", "Low-angle look looking up at a dark, empty cockpit instrument array in deep shadow,", "Clinical forensic workbench macro layout with metal components laid out for scanning," ] }, "Maritime Engine": { "style": "Deep-sea underwater mystery aesthetic, heavy oceanic pressure atmosphere, dark murky abyssal shadows, eerie volumetric sonar blue lighting, floating organic sea dust particles, underwater cinematic film grain. No text.", "angles": [ "Extreme macro detail shot of rusted hull rivets and marine encrustation under a harsh diving flashlight line,", "Top-down deep-sea sonar scanning view showing a skeletal shipwreck hull profile silhouette,", "Low-angle looking up from the ocean floor towards a shadowy, looming sunken bow section,", "Macro close-up on a water-logged captain's log book drifting on a rusted deck plate," ] }, "Survival Engine": { "style": "Cold hostile wilderness mystery style, oppressive sub-zero arctic atmosphere, bleak foggy mountain shadows, raw granular national park archive photo look, harsh wind-blown cinematic lens textures, winter palette. No text.", "angles": [ "Macro close-up on a frozen piece of abandoned expedition gear partially buried in wind-swept snow,", "High-angle aerial drone topographic look over a vast, desolate snow-covered pine forest pass,", "Low-angle oblique point-of-view tracking empty footprints vanishing abruptly into heavy fog,", "Clinical vintage mapping layout showing an old trail map with hand-drawn emergency markers," ] }, "Corporate Engine": { "style": "High-stakes corporate espionage aesthetic, clinical modern white-collar void, stark fluorescence meeting dark glass boardroom reflections, cold steel cyber-surveillance palette, anamorphic corporate mystery lighting. No text.", "angles": [ "Extreme macro angle of a shredded document strip detailing financial rows under a magnifying glass,", "High-angle security camera layout tracking across an empty, dark server room array with blinking nodes,", "Low-angle look looking up at a glass corporate skyscraper towering into a dark, stormy night sky,", "Macro focus profile on an unlabelled encrypted flash drive resting on a dark polished executive desk," ] } } # Get credentials GEMINI_API_KEY = os.getenv('GEMINI_API_KEY') CLOUDFLARE_ACCOUNT_ID = os.getenv('CLOUDFLARE_ACCOUNT_ID') CLOUDFLARE_API_TOKEN = os.getenv('CLOUDFLARE_API_TOKEN') SESSION_ID = f"ui_{int(time.time())}" TEMP_DIR = os.path.abspath(f'cache_session_{SESSION_ID}') os.makedirs(TEMP_DIR, exist_ok=True) os.makedirs('generated', exist_ok=True) # Helper function for duration def get_audio_duration(audio_path: str) -> float: try: data, samplerate = sf.read(audio_path) return max(len(data) / samplerate, 2.0) except: return 4.0 # ============================================================================== # 3. INTERFACE BACKEND ENGINE STAGE 1: TEXT GENERATION # ============================================================================== def ui_generate_script_and_seo(case_topic: str, niche: str): if not GEMINI_API_KEY: return "❌ Missing GEMINI_API_KEY in environment variables.", "" client = genai.Client(api_key=GEMINI_API_KEY) # Customizing the prompt based on the chosen niche variant prompt = ( f"Perform exhaustive deep-dive web research and generate a highly mysterious, suspenseful documentary script about '{case_topic}' " f"tailored to the theme of the {niche}.\n" f"Break down the full case timeline into exactly 12 chronological scenes. Each scene must contain narration and a specific, concrete visual B-roll blueprint prompt.\n\n" f"CRITICAL 10-MINUTE FORMATTING LAWS:\n" f"- Target exactly 12 scenes. Each scene's narration block MUST be around 110 to 125 words long to perfectly hit the 10-minute brand mark.\n" f"- Scene 1 MUST act as an intense 'Cold Open' hook: start directly with a shocking piece of evidence, audio log quote, or open-loop mystery question. Do NOT say 'welcome back'.\n" f"- Use ellipses (...) for ominous trails and ALL-caps words for vocal emphasis.\n\n" f"Output your entire script response strictly as a raw JSON array matching this format layout:\n" f"[\n {{\"narration\": \"Narration text here...\", \"broll_prompt\": \"Visual description here\"}}\n]" ) try: response = client.models.generate_content( model='gemini-2.5-flash', contents=prompt, config=types.GenerateContentConfig(response_mime_type='application/json') ) script_json_str = response.text # Now generate marketing SEO data seo_prompt = ( f"Generate a comprehensive YouTube & Cross-Platform SEO suite for a 10-minute mystery video about '{case_topic}' on a channel running a {niche}.\n" f"Provide exactly:\n" f"1. 3 High-CTR Titles (under 70 chars)\n" f"2. SEO Description optimized with 5 sequential timeline stamps\n" f"3. 25 Tags/Hashtags formatted as a single comma-separated block\n" f"4. An optimized text caption for X (Twitter), Facebook, and Instagram Reels." ) seo_response = client.models.generate_content(model='gemini-2.5-flash', contents=seo_prompt) seo_metadata_str = seo_response.text return script_json_str, seo_metadata_str except Exception as e: return f"Error generating data: {str(e)}", "" # ============================================================================== # 4. INTERFACE BACKEND ENGINE STAGE 2: MEDIA RENDERING PIPELINE # ============================================================================== def ui_execute_render_pipeline(script_json_text: str, niche: str, progress=gr.Progress()): try: scenes = json.loads(script_json_text) except Exception as je: return None, None, None, f"❌ Invalid JSON format in script box: {str(je)}" if not CLOUDFLARE_ACCOUNT_ID or not CLOUDFLARE_API_TOKEN: return None, None, None, "❌ Cloudflare AI authentication tokens missing." client = genai.Client(api_key=GEMINI_API_KEY) aesthetic = NICHE_AESTHETICS[niche] video_segments_list = [] # Save style ref baseline frame dynamically matching the chosen niche style_ref_frame = os.path.join(TEMP_DIR, 'style_ref.jpg') orchestration_query = f"Cinematic mystery documentary director framework. Baseline: {aesthetic['angles'][0]} {aesthetic['style']}" try: res = client.models.generate_images( model='imagen-3.0-generate-002', prompt=orchestration_query, config=types.GenerateImagesConfig(number_of_images=1, aspect_ratio='16:9', output_mime_type='image/jpeg') ) with open(style_ref_frame, 'wb') as f: f.write(res.generated_images[0].image.image_bytes) except Exception as ie: print(f"[*] Fallback baseline applied: {ie}") style_ref_frame = None # Processing loop over manually verified script blocks for idx, node in enumerate(scenes): progress(idx / len(scenes), desc=f"🎬 Rendering Scene {idx+1}/{len(scenes)}") try: # 1. Cloudflare TTS Audio Block voice_path = os.path.join(TEMP_DIR, f'voice_{idx}.wav') url = f'https://cloudflare.com{CLOUDFLARE_ACCOUNT_ID}/ai/run/@cf/myshell/melotts' 
+
+Use code with caution.
+
+headers = {'Authorization': f'Bearer {CLOUDFLARE_API_TOKEN}', 'Content-Type': 'application/json'}
+res = requests.post(url, headers=headers, json={'text': node['narration'], 'lang': 'en'}, timeout=40)
+with open(voice_path, 'wb') as f:
+f.write(res.content)
+
+node_duration = get_audio_duration(voice_path)
+
+# 2. Imagen 3 Niche-Bounded B-Roll Extraction
+still_frame_path = os.path.join(TEMP_DIR, f'img_{idx}.jpg')
+selected_angle = aesthetic['angles'][idx % len(aesthetic['angles'])]
+scene_query = f"Cinematic documentary frame. Visual description: '{node['broll_prompt']}'. Aesthetic profile: {selected_angle} {aesthetic['style']}"
+
+img_res = client.models.generate_images(
+model='imagen-3.0-generate-002',
+prompt=scene_query,
+config=types.GenerateImagesConfig(number_of_images=1, aspect_ratio='16:9', output_mime_type='image/jpeg')
+)
+with open(still_frame_path, 'wb') as f:
+f.write(img_res.generated_images[0].image.image_bytes)
+
+# 3. FFmpeg Dynamic Motion Overlay Compilation
+video_output_path = os.path.join(TEMP_DIR, f'clip_{idx}.mp4')
+total_frames = int(max(node_duration * 25, 25))
+motion_filter = (
+f'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,framerate=fps=25,'
+f"zoompan=z='min(zoom+0.0005,1.05)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={total_frames}:s=1920x1080:fps=25,"
+f'scale=1920:1080,trim=duration={node_duration},format=yuv420p,setpts=PTS-STARTPTS'
+)
+
+command = [
+'ffmpeg', '-y', '-loop', '1', '-t', str(node_duration),
+'-i', still_frame_path, '-i', voice_path,
+'-vf', motion_filter, '-c:v', V_ENCODER
+] + V_EXTRA_FLAGS + [
+'-r', '25', '-fps_mode', 'cfr', '-pix_fmt', 'yuv420p',
+'-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-ac', '2',
+'-shortest', video_output_path
+]
+subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+video_segments_list.append(video_output_path)
+
+except Exception as seg_err:
+print(f"⚠️ Recoverable segment crash: {seg_err}")
+continue
+
+# 4. Stream Stitch Concat Operations
+progress(0.90, desc="✂️ Merging and Slicing Global Assets...")
+concat_list_path = os.path.join(TEMP_DIR, 'concat.txt')
+with open(concat_list_path, 'w', encoding='utf-8') as f:
+for p in video_segments_list:
+f.write(f"file '{os.path.abspath(p)}'\n")
+
+long_form_output = os.path.abspath('generated/long_form_master.mp4')
+concat_cmd = ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', concat_list_path, '-c', 'copy', long_form_output]
+subprocess.run(concat_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+# 5. Extract Multi-Platform 9:16 Vertical Cropped Shorts
+short_1_output = os.path.abspath('generated/vertical_short_1.mp4')
+short_2_output = os.path.abspath('generated/vertical_short_2.mp4')
+crop_filter = 'crop=ih9/16:ih:(iw-(ih9/16))/2:0,scale=1080:1920'
+
+# Short 1: Cold open crop (0 to 45s)
+subprocess.run(['ffmpeg', '-y', '-i', long_form_output, '-ss', '0', '-t', '45', '-vf', crop_filter, '-c:v', V_ENCODER] + V_EXTRA_FLAGS + ['-c:a', 'aac', short_1_output], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+# Short 2: Mid-case climax crop (60s to 105s)
+subprocess.run(['ffmpeg', '-y', '-i', long_form_output, '-ss', '60', '-t', '45', '-vf', crop_filter, '-c:v', V_ENCODER] + V_EXTRA_FLAGS + ['-c:a', 'aac', short_2_output], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+return long_form_output, short_1_output, short_2_output, "🚀 All assets rendered and ready for download!"
+
+==============================================================================
+
+5. GRADIO CONTROL HUB VISUAL WINDOW LAYOUT
+
+==============================================================================
+
+with gr.Blocks(theme=gr.themes.Soft(primary_hue="zinc", neutral_hue="slate")) as demo:
+gr.Markdown("# 🌐 HIGH-PERFORMANCE AUDIO/VISUAL BROADCAST HUB")
+gr.Markdown("Manual script editing overlay sitting directly atop your uncrashable automation rendering architecture.")
+
+with gr.Row():
+with gr.Column(scale=2):
+case_topic_input = gr.Textbox(label="1. Target Case Topic / Core Records", placeholder="Paste or type specific Tier-1 target records here...", lines=2)
+niche_dropdown = gr.Dropdown(choices=list(NICHE_AESTHETICS.keys()), value="True Crime Engine", label="2. Channel Engine Variant Matrix")
+btn_draft = gr.Button("🔮 STEP 1: EXECUTE DATA MINING & SCRIPT DRAFT", variant="primary")
+
+with gr.Column(scale=3):
+seo_output_box = gr.Textbox(label="📈 Cross-Platform SEO Suite Copy-Paste Window (YT, X, FB, IG)", lines=6, interactive=True)
+
+with gr.Row():
+script_output_box = gr.Textbox(label="📝 VISUAL EDITING LAB (Freely edit script text or JSON formatting rows below before rendering)", lines=12, interactive=True)
+
+with gr.Row():
+btn_render = gr.Button("🎬 STEP 2: EXECUTE FULL COMPILATION & VIDEO RENDER GRAPH", variant="stop")
+
+with gr.Row():
+with gr.Column():
+lfv_player = gr.Video(label="Flagship Long-Form Master (16:9 Standard)")
+with gr.Column():
+short_1_player = gr.Video(label="Cross-Platform Short 1 (Cold Open Hook)")
+with gr.Column():
+short_2_player = gr.Video(label="Cross-Platform Short 2 (Mid-Case Climax)")
+
+system_status_msg = gr.Markdown("### 🎛️ System Status: Standing by for inputs...")
+
+# Wire UI Events
+btn_draft.click(fn=ui_generate_script_and_seo, inputs=[case_topic_input, niche_dropdown], outputs=[script_output_box, seo_output_box])
+btn_render.click(fn=ui_execute_render_pipeline, inputs=[script_output_box, niche_dropdown], outputs=[lfv_player, short_1_player, short_2_player, system_status_msg])
+
+if name == "main":
+demo.launch(server_name="127.0.0.1", server_port=7860, share=False)
